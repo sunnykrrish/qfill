@@ -159,7 +159,8 @@ async function getAnswers(questions) {
 //    Returns true only if it actually submitted.
 // ---------------------------------------------------------------------------
 async function fillForm(page, formUrl) {
-  await page.goto(formUrl, { waitUntil: 'domcontentloaded' });
+  // Use 'commit' navigation so waitForSelector starts as soon as HTTP response streams in
+  await page.goto(formUrl, { waitUntil: 'commit' });
   if (signInWall(page.url())) {
     console.log('🔒 Google is asking to sign in — the saved session expired.');
     console.log('   Re-run with HEADLESS=false, sign in with your ORG account, then retry.');
@@ -167,60 +168,83 @@ async function fillForm(page, formUrl) {
   }
   await page.waitForSelector('div[role="listitem"]');
 
-  // Tick "Record email" checkbox if present and not already checked
-  try {
-    const recordCheckbox = page
-      .locator('[role="checkbox"], input[type="checkbox"]')
-      .filter({ hasText: /record (.* as the email|.* response|the response|.*@)/i })
-      .first();
-
-    const recordByRole = page
-      .getByRole('checkbox', { name: /record (.* as the email|.* response|the response|.*@)/i })
-      .first();
-
-    let target = null;
-    if ((await recordCheckbox.count()) > 0 && (await recordCheckbox.isVisible().catch(() => false))) {
-      target = recordCheckbox;
-    } else if ((await recordByRole.count()) > 0 && (await recordByRole.isVisible().catch(() => false))) {
-      target = recordByRole;
-    }
-
-    if (target) {
-      const isChecked =
-        (await target.getAttribute('aria-checked')) === 'true' ||
-        (await target.isChecked().catch(() => false));
+  // Single-pass DOM evaluation: check email checkbox & extract questions
+  const { questions, tickedCheckbox } = await page.evaluate(() => {
+    let ticked = false;
+    const checkboxes = Array.from(document.querySelectorAll('[role="checkbox"], input[type="checkbox"]'));
+    const recordBox = checkboxes.find((c) =>
+      /record (.* as the email|.* response|the response|.*@)/i.test(
+        c.innerText || c.getAttribute('aria-label') || c.parentElement?.innerText || ''
+      )
+    );
+    if (recordBox) {
+      const isChecked = recordBox.getAttribute('aria-checked') === 'true' || recordBox.checked;
       if (!isChecked) {
-        await target.click();
-        console.log('☑️ Ticked "Record email" checkbox.');
+        recordBox.click();
+        ticked = true;
       }
     }
-  } catch {
-    // Ignore if checkbox is not present on this form
+
+    const items = Array.from(document.querySelectorAll('div[role="listitem"]'));
+    const qList = [];
+    items.forEach((item) => {
+      const field = item.querySelector('input[type="text"], textarea');
+      const heading = item.querySelector('[role="heading"]');
+      if (field && heading) {
+        qList.push(heading.innerText.replace(/\s*\*$/, '').trim());
+      }
+    });
+    return { questions: qList, tickedCheckbox: ticked };
+  });
+
+  if (tickedCheckbox) {
+    console.log('☑️ Ticked "Record email" checkbox.');
   }
 
-  const items = await page.$$('div[role="listitem"]');
-  const pairs = [];
-  for (const item of items) {
-    const field = await item.$('input[type="text"], textarea');
-    if (!field) continue;
-    const heading = await item.$('[role="heading"]');
-    const q = heading ? (await heading.innerText()).replace(/\s*\*$/, '').trim() : '';
-    if (q) pairs.push({ q, field });
-  }
-  if (!pairs.length) {
+  if (!questions.length) {
     console.log('No fill-in-the-blank fields found — check the form / signed-in account.');
     return false;
   }
 
-  const answers = await getAnswers(pairs.map((p) => p.q));
-  for (let i = 0; i < pairs.length; i++) {
-    await pairs[i].field.fill(answers[i] ?? '');
-  }
+  const answers = await getAnswers(questions);
+
+  // Fast direct DOM fill & instant submit in the same evaluation pass
+  const submitted = await page.evaluate(
+    ({ ans, shouldSubmit }) => {
+      const items = Array.from(document.querySelectorAll('div[role="listitem"]'));
+      let idx = 0;
+      items.forEach((item) => {
+        const field = item.querySelector('input[type="text"], textarea');
+        if (field && ans[idx] !== undefined) {
+          field.value = ans[idx];
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+          field.dispatchEvent(new Event('blur', { bubbles: true }));
+          idx++;
+        }
+      });
+
+      if (shouldSubmit) {
+        const buttons = Array.from(document.querySelectorAll('div[role="button"], button, input[type="submit"]'));
+        const submitBtn = buttons.find((b) =>
+          /submit|send|vrati/i.test(b.innerText || b.getAttribute('aria-label') || b.value || '')
+        );
+        if (submitBtn) {
+          submitBtn.click();
+          return true;
+        }
+      }
+      return false;
+    },
+    { ans: answers, shouldSubmit: AUTO_SUBMIT === 'true' }
+  );
 
   if (AUTO_SUBMIT === 'true') {
-    await page.getByRole('button', { name: /submit/i }).click();
+    if (!submitted) {
+      // Fallback if DOM click didn't trigger
+      await page.getByRole('button', { name: /submit/i }).click();
+    }
     console.log('Quiz Submitted at:', new Date().toISOString());
-    // await page.waitForTimeout(1500);
     return true;
   }
   console.log('✅ Filled. Review, then submit manually. (Set AUTO_SUBMIT=true to auto-submit.)');

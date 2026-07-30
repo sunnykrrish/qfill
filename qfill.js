@@ -80,6 +80,7 @@ async function pollGmailForFormUrl(page) {
   while (Date.now() <= deadline) {
     const found = await quizRowPresent(page);
     if (found) {
+      console.log("Found quiz row Time:", new Date().toISOString());
       await page.locator('tr.zA').first().click();
       await page.waitForSelector('.a3s', { timeout: 15000 });
       const url = await page.evaluate(() => {
@@ -123,6 +124,7 @@ async function pollGmailForFormUrl(page) {
 // 2. LLM: one answer per line, order preserved, no bullets/numbering.
 // ---------------------------------------------------------------------------
 async function getAnswers(questions) {
+  console.log("Getting answers at:", new Date().toISOString());
   const numbered = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
   const prompt =
     'Answer each quiz question below. Rules:\n' +
@@ -136,6 +138,7 @@ async function getAnswers(questions) {
     model: OPENAI_MODEL,
     temperature: 0,
     messages: [{ role: 'user', content: prompt }],
+    service_tier: 'priority'
   });
 
   const answers = (res.choices[0].message.content || '')
@@ -147,6 +150,7 @@ async function getAnswers(questions) {
   if (answers.length !== questions.length) {
     console.warn(`⚠️  Got ${answers.length} answers for ${questions.length} questions — verify before submit.`);
   }
+  console.log("Got answers at:", new Date().toISOString());
   return answers;
 }
 
@@ -215,8 +219,8 @@ async function fillForm(page, formUrl) {
 
   if (AUTO_SUBMIT === 'true') {
     await page.getByRole('button', { name: /submit/i }).click();
-    await page.waitForTimeout(1500);
-    console.log('✅ Submitted.');
+    console.log('Quiz Submitted at:', new Date().toISOString());
+    // await page.waitForTimeout(1500);
     return true;
   }
   console.log('✅ Filled. Review, then submit manually. (Set AUTO_SUBMIT=true to auto-submit.)');

@@ -53,7 +53,7 @@ function searchUrl() {
 //   parts.push('in:anywhere')
   if (QUIZ_SENDER) parts.push(`from:${QUIZ_SENDER}`);
   if (QUIZ_SUBJECT) parts.push(`subject:(${QUIZ_SUBJECT})`);
-  parts.push('newer_than:2d');
+  parts.push('newer_than:1d');
   return `https://mail.google.com/mail/u/${GMAIL_USER_INDEX}/#search/${encodeURIComponent(parts.join(' '))}`;
 }
 

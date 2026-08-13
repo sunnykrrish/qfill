@@ -244,7 +244,9 @@ async function fillForm(page, formUrl) {
       // Fallback if DOM click didn't trigger
       await page.getByRole('button', { name: /submit/i }).click();
     }
+
     console.log('Quiz Submitted at:', new Date().toISOString());
+    await page.waitForTimeout(1500);
     return true;
   }
   console.log('✅ Filled. Review, then submit manually. (Set AUTO_SUBMIT=true to auto-submit.)');
